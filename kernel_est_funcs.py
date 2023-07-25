@@ -14,7 +14,7 @@ from sklearn.linear_model import RANSACRegressor
 plt.style.use('seaborn')
 
 #sns.set_style('white')
-
+ 
 
 
 def sim_calcium(spikes, tau=100, neuron_id=500):
