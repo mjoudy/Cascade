@@ -20,8 +20,5 @@ def kernel_fit(signal, func='exp', do_plot=False):
             fig, ax = plt.subplots()
             ax.scatter(x_axis, signal, marker='.',s=5, label='Data')
             ax.plot(x_axis, func_exp(x_axis, A_fit, tau_fit, c_fit), label='Fit')
+            ax.set_title('Fitted time constant: '+str(tau_fit))
         return tau_fit
-    
-
-    
-    
