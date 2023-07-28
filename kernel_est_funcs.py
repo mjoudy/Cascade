@@ -68,6 +68,37 @@ def smoothed_signals(signal, win_len, neg = False, do_plots=False):
         return negetive_cal, negetive_deriv
     else:
         return smooth_cal, smooth_deriv
+    
+'''
+#this version works for simulated signal which spikes train are boolean.
+#in current dataset spikes are as event times.
+def cut_spikes(spikes, signal, deriv, win_len=5):
+    event_spikes = np.where(spikes == 1)[0]
+
+    remove_index = []
+    for i in event_spikes:
+            remove_index.append(np.arange(i-5, i+5))
+    remove_index = np.array(remove_index)
+
+    signal = np.delete(signal, remove_index)
+    deriv = np.delete(deriv, remove_index)
+
+    return signal, deriv
+'''
+
+def cut_spikes(spikes, signal, deriv, win_len=5):
+    #event_spikes = np.where(spikes == 1)[0]
+    spikes = spikes.astype(int)
+
+    remove_index = []
+    for i in spikes:
+        remove_index.append(np.arange(i-win_len, i+win_len))
+    remove_index = np.array(remove_index)
+
+    signal = np.delete(signal, remove_index)
+    deriv = np.delete(deriv, remove_index)
+
+    return signal, deriv
 
 
 def scatter_all(signal, win_len):
