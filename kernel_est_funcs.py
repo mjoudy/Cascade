@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import scipy.signal as sig
 import seaborn as sns
 
+from scipy.interpolate import interp1d
 from sklearn.linear_model import RANSACRegressor
 
 #plt.style.use('ggplot')
@@ -69,31 +70,44 @@ def smoothed_signals(signal, win_len, neg = False, do_plots=False):
     else:
         return smooth_cal, smooth_deriv
     
-'''
-#this version works for simulated signal which spikes train are boolean.
-#in current dataset spikes are as event times.
+#this function is defined just for cascade project
+def upsample(times, dff, spikes, new_rate, intp_method = 'cubic', do_plot=False):
+
+    time_start = times[0]
+    shifted_time = times - time_start
+    intpld_signal_func = interp1d(shifted_time, dff, kind=intp_method)
+    evenly_spaced_time = np.linspace(shifted_time[0], shifted_time[-1], int((shifted_time[-1])*new_rate))
+    upsampled_signal = intpld_signal_func(evenly_spaced_time)
+    time_shift = np.zeros(int(times[0]*new_rate))
+    upsampled_signal = np.concatenate((time_shift, upsampled_signal), axis=0)
+    upsampled_spikes = new_rate*spikes
+    
+    if do_plot:
+        plt.figure(figsize=(20,5))
+        plt.plot(upsampled_signal)
+        max_dff = np.max(dff[4:])
+        min_dff = np.min(dff[4:])
+        plt.eventplot(upsampled_spikes, lineoffsets=min_dff - max_dff/20, linelengths=max_dff/20, color='k')
+
+    return upsampled_signal, upsampled_spikes
+
+
 def cut_spikes(spikes, signal, deriv, win_len=5):
-    event_spikes = np.where(spikes == 1)[0]
+    
+    bool_check = all(element==0 or element==1 for element in spikes)
 
-    remove_index = []
-    for i in event_spikes:
-            remove_index.append(np.arange(i-5, i+5))
-    remove_index = np.array(remove_index)
-
-    signal = np.delete(signal, remove_index)
-    deriv = np.delete(deriv, remove_index)
-
-    return signal, deriv
-'''
-
-def cut_spikes(spikes, signal, deriv, win_len=5):
-    #event_spikes = np.where(spikes == 1)[0]
-    spikes = spikes.astype(int)
+    if bool_check:
+        spikes = np.where(spikes)[0]
+    else:
+        spikes = spikes.astype(int)
 
     remove_index = []
     for i in spikes:
         remove_index.append(np.arange(i-win_len, i+win_len))
+        #add a line to include cut spikes
     remove_index = np.array(remove_index)
+    remove_index = remove_index.flatten()
+    remove_index = remove_index[remove_index>0]
 
     signal = np.delete(signal, remove_index)
     deriv = np.delete(deriv, remove_index)
