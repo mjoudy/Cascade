@@ -91,7 +91,7 @@ def upsample(times, dff, spikes, new_rate, intp_method = 'cubic', do_plot=False)
 
     return upsampled_signal, upsampled_spikes
 
-
+'''
 def cut_spikes(spikes, signal, deriv, win_len=5):
     
     bool_check = all(element==0 or element==1 for element in spikes)
@@ -108,6 +108,32 @@ def cut_spikes(spikes, signal, deriv, win_len=5):
     remove_index = np.array(remove_index)
     remove_index = remove_index.flatten()
     remove_index = remove_index[remove_index>0]
+
+    signal = np.delete(signal, remove_index)
+    deriv = np.delete(deriv, remove_index)
+
+    return signal, deriv
+
+'''
+
+def cut_spikes(spikes, signal, deriv, win_len=5):
+    
+    bool_check = all(element==0 or element==1 for element in spikes)
+
+    if bool_check:
+        event_spikes = np.where(spikes)[0]
+    else:
+        event_spikes = spikes.astype(int)
+
+    remove_index = []
+    for i in event_spikes:
+        remove_index.append(np.arange(i-win_len, i+win_len))
+        #add a line to include cut spikes
+    
+    remove_index = np.array(remove_index)
+    remove_index = remove_index.flatten()
+    remove_index = remove_index[remove_index>0]
+    remove_index = remove_index[remove_index<len(signal)]
 
     signal = np.delete(signal, remove_index)
     deriv = np.delete(deriv, remove_index)
