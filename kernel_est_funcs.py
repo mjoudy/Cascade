@@ -12,7 +12,7 @@ from scipy.interpolate import interp1d
 from sklearn.linear_model import RANSACRegressor
 
 #plt.style.use('ggplot')
-plt.style.use('seaborn')
+plt.style.use('seaborn-v0_8')
 
 #sns.set_style('white')
  
