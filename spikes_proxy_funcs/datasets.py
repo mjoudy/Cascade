@@ -28,7 +28,7 @@ def load_selected_data(ground_truth_folder='Ground_truth', num_datasets=None, nu
         dataset_names = sorted(list(all_datasets.keys()))
         
         # Filter datasets
-        if num_datasets is not None:
+        if num_datasets is not None and num_datasets != 'all':
             selected_names = dataset_names[:num_datasets]
         else:
             selected_names = dataset_names
@@ -39,7 +39,7 @@ def load_selected_data(ground_truth_folder='Ground_truth', num_datasets=None, nu
             recordings = all_datasets[name]
             
             # Filter neurons within dataset
-            if num_neurons_per_dataset is not None:
+            if num_neurons_per_dataset is not None and num_neurons_per_dataset != 'all':
                 selected_recordings = recordings[:num_neurons_per_dataset]
             else:
                 selected_recordings = recordings

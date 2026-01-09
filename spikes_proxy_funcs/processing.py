@@ -31,7 +31,16 @@ def upsample(times, dff, spikes, new_rate, intp_method='cubic', do_plot=False):
     """
     time_start = times[0]
     shifted_time = times - time_start
-    intpld_signal_func = interp1d(shifted_time, dff, kind=intp_method)
+    
+    # Ensure shifted_time does not have duplicates (required for interp1d)
+    unique_indices = np.unique(shifted_time, return_index=True)[1]
+    # Sort indices to preserve order (though unique usually does returns sorted values for sorted input)
+    unique_indices = np.sort(unique_indices)
+    
+    shifted_time_unique = shifted_time[unique_indices]
+    dff_unique = dff[unique_indices]
+    
+    intpld_signal_func = interp1d(shifted_time_unique, dff_unique, kind=intp_method)
     evenly_spaced_time = np.linspace(shifted_time[0], shifted_time[-1], int((shifted_time[-1])*new_rate))
     upsampled_signal = intpld_signal_func(evenly_spaced_time)
     time_shift = np.zeros(int(times[0]*new_rate))
