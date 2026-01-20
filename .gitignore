@@ -7,3 +7,5 @@ __pycache__/
 
 #my added data to check with my simulated data
 /data
+/reconstruction_plots
+/reconstruction_analysis

@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import savgol_filter
 from sklearn.linear_model import RANSACRegressor
+from scipy.signal import lfilter
+from scipy.stats import pearsonr
 
 def cut_spikes(spikes, signal, deriv, win_len=5):
     """Removes indices around spike events to isolate the 'decay-only' bulk."""
@@ -83,24 +85,197 @@ def estimate_tau(calcium_data, true_spikes=None, neuron_indices='all',
     return estimated_taus
 
 def calculate_cv2(spike_matrix):
-    """Calculates CV2 for each neuron individually."""
-    if spike_matrix.ndim == 1:
-        spike_matrix = spike_matrix.reshape(1, -1)
+    """Calculates CV2 for each neuron individually, handling both binary masks and index lists."""
+    # Ensure input is a numpy array
+    spike_matrix = np.atleast_1d(spike_matrix)
     
-    n_neurons = spike_matrix.shape[0]
-    cv2_values = np.zeros(n_neurons)
+    # NEW: Check if the array is empty to prevent ValueError in np.max()
+    if spike_matrix.size == 0:
+        return np.nan
     
-    for i in range(n_neurons):
-        # Assuming binary spike train or detecting peaks > 0.5
-        spike_times = np.where(spike_matrix[i, :] > 0.5)[0]
+    # If the input is a 1D list of spike indices/times (values > 1)
+    if spike_matrix.ndim == 1 and np.max(spike_matrix) > 1.0:
+        spike_times = spike_matrix
+    else:
+        # If it's a binary matrix (0s and 1s), identify the spike positions
+        if spike_matrix.ndim == 1:
+            spike_times = np.where(spike_matrix > 0.5)[0]
+        else:
+            # Handle 2D matrices
+            results = []
+            for i in range(spike_matrix.shape[0]):
+                st = np.where(spike_matrix[i, :] > 0.5)[0]
+                if len(st) < 3:
+                    results.append(np.nan)
+                else:
+                    isi = np.diff(st)
+                    results.append(np.mean(2 * np.abs(isi[1:] - isi[:-1]) / (isi[1:] + isi[:-1])))
+            return np.array(results)
+
+    # Calculation for a single neuron (index list or 1D mask)
+    if len(spike_times) < 3:
+        return np.nan
         
-        if len(spike_times) < 3:
-            # Need at least 3 spikes (2 intervals) to calculate CV2 of diffs
-            cv2_values[i] = np.nan
-            continue
-            
-        isi = np.diff(spike_times)
-        # CV2 formula: mean(2 * |ISI_i+1 - ISI_i| / (ISI_i+1 + ISI_i))
-        cv2_values[i] = np.mean(2 * np.abs(isi[1:] - isi[:-1]) / (isi[1:] + isi[:-1]))
+    isi = np.diff(spike_times)
+    return np.mean(2 * np.abs(isi[1:] - isi[:-1]) / (isi[1:] + isi[:-1]))
+
+
+def reconstruct_calcium(spikes, tau_frames, signal_length):
+    """
+    Reconstructs calcium signal using the AR(1) model.
+    Handles 'spikes' as either a binary vector or a list of indices.
+    """
+    if np.isnan(tau_frames) or tau_frames <= 0:
+        return np.zeros(signal_length)
+    
+    # 1. Convert to binary vector if input is indices
+    if len(spikes) != signal_length:
+        binary_spikes = np.zeros(signal_length)
+        # Ensure indices are integers and within bounds
+        idx = np.round(spikes).astype(int)
+        idx = idx[(idx >= 0) & (idx < signal_length)]
+        binary_spikes[idx] = 1.0
+    else:
+        binary_spikes = spikes
+
+    # 2. Apply AR(1) Filter (a = exp(-dt/tau), dt=1 frame)
+    a_coeff = np.exp(-1.0 / tau_frames)
+    b, a = [1.0], [1.0, -a_coeff]
+    
+    return lfilter(b, a, binary_spikes)
+
+def calculate_reconstruction_corr(original_signal, spikes, tau_frames):
+    """Calculates Pearson correlation between original and reconstructed calcium."""
+    sig_len = len(original_signal)
+    recon = reconstruct_calcium(spikes, tau_frames, sig_len)
+    
+    if np.all(recon == 0) or np.any(np.isnan(recon)):
+        return np.nan
         
-    return cv2_values
+    # Pearson correlation is invariant to scaling/offset
+    corr, _ = pearsonr(original_signal, recon)
+    return corr
+
+def reconstruct_spikes(signal, tau_frames):
+    """Simple deconvolution: S_t = C_t - exp(-1/tau) * C_{t-1}"""
+    if np.isnan(tau_frames) or tau_frames <= 0:
+        return np.zeros_like(signal)
+    a_coeff = np.exp(-1.0 / tau_frames)
+    recon_spks = np.zeros_like(signal)
+    # The innovation at time t is the current signal minus the decayed previous state
+    recon_spks[1:] = signal[1:] - a_coeff * signal[:-1]
+    # Remove negative values (rectification) common in noise
+    recon_spks = np.maximum(recon_spks, 0)
+    return recon_spks
+
+def calculate_spike_correlation(signal, spikes, tau_frames):
+    """Pearson correlation between reconstructed spike density and ground truth."""
+    sig_len = len(signal)
+    recon_spks = reconstruct_spikes(signal, tau_frames)
+    
+    # Convert spikes to binary vector if they are indices
+    if len(spikes) != sig_len:
+        binary_spikes = np.zeros(sig_len)
+        idx = np.round(spikes).astype(int)
+        idx = idx[(idx >= 0) & (idx < sig_len)]
+        binary_spikes[idx] = 1.0
+    else:
+        binary_spikes = spikes
+        
+    if np.all(recon_spks == 0): return np.nan
+    corr, _ = pearsonr(binary_spikes, recon_spks)
+    return corr
+
+def calculate_cumsum_slope(spikes, sampling_rate):
+    """Calculates the slope of the cumulative sum of spikes (Events/sec)."""
+    if len(spikes) == 0: return 0
+    y = np.cumsum(spikes)
+    x = np.arange(len(y)) / sampling_rate
+    slope, _ = np.polyfit(x, y, 1)
+    return slope
+
+import numpy as np
+from scipy.signal import savgol_filter
+import matplotlib.pyplot as plt
+
+def get_reconstruction_metrics(res, window_len=51, poly_order=3, cut_win=10, new_rate=100):
+    """Performs calculations and returns a data dictionary + signals."""
+    u_sig = res['signal'].copy()
+    u_spk = res['spikes']
+    
+    # --- Standardize Signal (Handle NaNs) ---
+    if np.all(np.isnan(u_sig)):
+        return None # Entire signal is NaN, cannot process
+        
+    if np.any(np.isnan(u_sig)):
+        mask = np.isnan(u_sig)
+        u_sig[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask), u_sig[~mask])
+
+    # --- Tau Estimation ---
+    sig_smooth = savgol_filter(u_sig, window_length=window_len, polyorder=poly_order, deriv=0)
+    der_smooth = savgol_filter(u_sig, window_length=window_len, polyorder=poly_order, deriv=1)
+    sig_fit, der_fit, _ = cut_spikes(u_spk, sig_smooth, der_smooth, win_len=cut_win)
+    
+    try:
+        if len(sig_fit) > 2:
+            slope_fit, _ = np.polyfit(sig_fit, der_fit, 1)
+            tau_f = -1.0 / slope_fit if slope_fit < 0 else np.nan
+        else:
+            tau_f = np.nan
+    except: 
+        tau_f = np.nan
+        
+    # --- Reconstruction ---
+    # Using existing functions from rate_analysis.py
+    c_corr = calculate_reconstruction_corr(u_sig, u_spk, tau_f)
+    recon_calcium = reconstruct_calcium(u_spk, tau_f, len(u_sig))
+    s_corr = calculate_spike_correlation(u_sig, u_spk, tau_f)
+    recon_spks = reconstruct_spikes(u_sig, tau_f)
+    cs_slope = calculate_cumsum_slope(recon_spks, new_rate)
+    
+    # Calculate spike count correctly
+    n_spikes = len(u_spk) if len(u_spk) != len(u_sig) else np.sum(u_spk > 0.5)
+
+    stats = {
+        'Dataset': res['dataset'], 
+        'Neuron': res['neuron_idx'], 
+        'Spikes': int(n_spikes), # This key must exist for sorting
+        'Tau_s': round(tau_f/new_rate, 3) if not np.isnan(tau_f) else "N/A",
+        'Ca_Corr': round(c_corr, 3) if not np.isnan(c_corr) else "N/A",
+        'Spike_Corr': round(s_corr, 3) if not np.isnan(s_corr) else "N/A",
+        'Cumsum_Slope': round(cs_slope, 3)
+    }
+    
+    return stats, (u_sig, recon_calcium, recon_spks, u_spk, tau_f)
+
+def plot_reconstruction(stats, signals, new_rate=100, save_path=None, show=True):
+    """Independent plotting function."""
+    u_sig, recon_calcium, recon_spks, u_spk, tau_f = signals
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 10), sharex=True, 
+                                       gridspec_kw={'height_ratios': [3, 2, 1]})
+    time_axis = np.arange(len(u_sig)) / new_rate
+    
+    # Panel 1: Calcium Signal
+    ax1.plot(time_axis, u_sig, color='gray', alpha=0.4, label='Raw Fluorescence')
+    if recon_calcium is not None and not np.all(recon_calcium == 0):
+        # Normalize and scale for visualization
+        rc_norm = (recon_calcium - np.min(recon_calcium)) / (np.max(recon_calcium) - np.min(recon_calcium) + 1e-9)
+        rc_scaled = rc_norm * (np.max(u_sig) - np.min(u_sig)) + np.min(u_sig)
+        ax1.plot(time_axis, rc_scaled, color='crimson', label=f"Recon (r={stats['Ca_Corr']})")
+    ax1.set_title(f"DS: {stats['Dataset']} | N: {stats['Neuron']} | Tau: {stats['Tau_s']}s")
+    ax1.legend(loc='upper right')
+
+    # Panel 2: Deconvolution
+    ax2.plot(time_axis, recon_spks, color='darkorange', label=f"Deconvolved (r={stats['Spike_Corr']})")
+    ax2.legend(loc='upper right')
+
+    # Panel 3: Ground Truth
+    spike_times = time_axis[u_spk > 0.5] if len(u_spk) == len(u_sig) else np.array(u_spk) / new_rate
+    ax3.eventplot(spike_times, orientation='horizontal', colors='black', label='Ground Truth')
+    ax3.set_xlabel("Time (s)")
+    ax3.legend(loc='upper right')
+    
+    plt.tight_layout()
+    if save_path: plt.savefig(save_path)
+    if show: plt.show()
+    else: plt.close()
