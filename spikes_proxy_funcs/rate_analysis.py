@@ -156,22 +156,21 @@ def calculate_reconstruction_corr(original_signal, spikes, tau_frames):
     corr, _ = pearsonr(original_signal, recon)
     return corr
 
-def reconstruct_spikes(signal, tau_frames):
-    """Simple deconvolution: S_t = C_t - exp(-1/tau) * C_{t-1}"""
-    if np.isnan(tau_frames) or tau_frames <= 0:
-        return np.zeros_like(signal)
-    a_coeff = np.exp(-1.0 / tau_frames)
-    recon_spks = np.zeros_like(signal)
-    # The innovation at time t is the current signal minus the decayed previous state
-    recon_spks[1:] = signal[1:] - a_coeff * signal[:-1]
-    # Remove negative values (rectification) common in noise
-    recon_spks = np.maximum(recon_spks, 0)
-    return recon_spks
+def reconstruct_spikes(calcium_data, tau=100, window_len=31, poly_order=3):
+    """Reconstructs spikes using Savitzky-Golay filtering (neurons x time)."""
+    smooth_calcium = savgol_filter(calcium_data, window_length=window_len, 
+                                   polyorder=poly_order, deriv=0, axis=1)
+    smooth_derivative = savgol_filter(calcium_data, window_length=window_len, 
+                                      polyorder=poly_order, deriv=1, axis=1)
+    return smooth_derivative + (1/tau) * smooth_calcium
 
 def calculate_spike_correlation(signal, spikes, tau_frames):
     """Pearson correlation between reconstructed spike density and ground truth."""
     sig_len = len(signal)
-    recon_spks = reconstruct_spikes(signal, tau_frames)
+    # Reshape 1D signal to 2D (1, time) for the new reconstruct_spikes function
+    signal_2d = signal.reshape(1, -1)
+    recon_spks_2d = reconstruct_spikes(signal_2d, tau=tau_frames)
+    recon_spks = recon_spks_2d.squeeze()  # Convert back to 1D
     
     # Convert spikes to binary vector if they are indices
     if len(spikes) != sig_len:
@@ -230,7 +229,10 @@ def get_reconstruction_metrics(res, window_len=51, poly_order=3, cut_win=10, new
     c_corr = calculate_reconstruction_corr(u_sig, u_spk, tau_f)
     recon_calcium = reconstruct_calcium(u_spk, tau_f, len(u_sig))
     s_corr = calculate_spike_correlation(u_sig, u_spk, tau_f)
-    recon_spks = reconstruct_spikes(u_sig, tau_f)
+    # Reshape 1D signal to 2D (1, time) for the new reconstruct_spikes function
+    u_sig_2d = u_sig.reshape(1, -1)
+    recon_spks_2d = reconstruct_spikes(u_sig_2d, tau=tau_f)
+    recon_spks = recon_spks_2d.squeeze()  # Convert back to 1D
     cs_slope = calculate_cumsum_slope(recon_spks, new_rate)
     
     # Calculate spike count correctly

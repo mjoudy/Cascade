@@ -96,3 +96,40 @@ def plot_neuron_trace(data_dict, recording_index=0, ax=None):
     ax.legend(loc='upper right')
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
+
+import re
+
+class NeuroDataManager:
+    def __init__(self, data_dict):
+        self.raw_data = data_dict
+        # Maps integer ID -> Full String Key (e.g., 9 -> 'DS09-GCaMP6f-m-V1')
+        self.ds_map = self._build_ds_map()
+
+    def _build_ds_map(self):
+        mapping = {}
+        for key in self.raw_data.keys():
+            match = re.search(r'DS(\d+)', key)
+            if match:
+                ds_num = int(match.group(1))
+                mapping[ds_num] = key
+        return mapping
+
+    def get_neuron_data(self, ds_num, neuron_idx):
+        """Returns the specific arrays for a given dataset and neuron index."""
+        full_key = self.ds_map.get(ds_num)
+        if not full_key:
+            raise ValueError(f"Dataset {ds_num} not found. Available: {list(self.ds_map.keys())}")
+
+        session_list = self.raw_data[full_key]
+        if neuron_idx >= len(session_list):
+            raise IndexError(f"Neuron {neuron_idx} out of range for DS{ds_num} (Max index: {len(session_list)-1})")
+
+        neuron = session_list[neuron_idx]
+        
+        # We return the data as a tuple for easy unpacking
+        return neuron['t'], neuron['dff'], neuron['spikes']
+
+    def info(self):
+        """Check how many neurons are in each dataset."""
+        for num, key in sorted(self.ds_map.items()):
+            print(f"DS {num:02d}: {len(self.raw_data[key])} neurons ({key})")
