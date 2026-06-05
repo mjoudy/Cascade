@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import pearsonr, zscore, linregress
+from scipy.stats import pearsonr, spearmanr, zscore, linregress
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 from scipy.optimize import curve_fit
@@ -900,5 +900,98 @@ def estimate_manual_tau_exp(signal, fs=30.0, t_start=0.0, t_end=2.0, do_plot=Tru
 
         plt.tight_layout()
         plt.show()
+
+
+def compute_cumsum_correlation_metrics(true_spikes_train, reconstructed_spikes):
+    """
+    Pearson and Spearman between cumsum(true) and cumsum(reconstructed),
+    both before ('raw') and after ('calib') dividing reconstructed by the OLS slope factor.
+
+    Returns dict with keys:
+        pearson_cumsum_raw, pearson_cumsum_calib,
+        spearman_cumsum_raw, spearman_cumsum_calib
+    """
+    true_spikes_train    = np.asarray(true_spikes_train, dtype=float)
+    reconstructed_spikes = np.asarray(reconstructed_spikes, dtype=float)
+
+    x     = np.cumsum(true_spikes_train)
+    y_raw = np.cumsum(reconstructed_spikes)
+
+    nan_result = {
+        'pearson_cumsum_raw':   np.nan, 'pearson_cumsum_calib':  np.nan,
+        'spearman_cumsum_raw':  np.nan, 'spearman_cumsum_calib': np.nan,
+    }
+
+    if len(x) < 2 or np.std(x) == 0 or np.std(y_raw) == 0:
+        return nan_result
+
+    # OLS slope forced through origin (same as in analyze_cumsum_calibration)
+    model = LinearRegression(fit_intercept=False)
+    model.fit(x.reshape(-1, 1), y_raw)
+    slope = model.coef_[0]
+
+    if np.isnan(slope) or slope == 0:
+        y_calib = y_raw
+    else:
+        y_calib = np.cumsum(reconstructed_spikes / slope)
+
+    try:
+        p_raw,   _ = pearsonr(x, y_raw)
+        p_calib, _ = pearsonr(x, y_calib)
+        s_raw,   _ = spearmanr(x, y_raw)
+        s_calib, _ = spearmanr(x, y_calib)
+    except Exception:
+        return nan_result
+
+    return {
+        'pearson_cumsum_raw':   float(p_raw),
+        'pearson_cumsum_calib': float(p_calib),
+        'spearman_cumsum_raw':  float(s_raw),
+        'spearman_cumsum_calib': float(s_calib),
+    }
+
+
+def compute_signal_correlation_metrics(sig1, sig2):
+    """
+    Pearson and Spearman between two signals, both raw and after OLS amplitude
+    scaling of sig2 to match sig1 (same scaling used for R²/chi²/NMSE).
+
+    Note: both scale variants are mathematically identical for Pearson and Spearman
+    because both metrics are invariant to linear transformations; they are included
+    for consistency with the rest of the GOF reporting.
+
+    Returns dict with keys:
+        pearson_raw, pearson_scaled, spearman_raw, spearman_scaled
+    """
+    sig1 = np.asarray(sig1, dtype=float)
+    sig2 = np.asarray(sig2, dtype=float)
+
+    nan_result = {
+        'pearson_raw': np.nan, 'pearson_scaled': np.nan,
+        'spearman_raw': np.nan, 'spearman_scaled': np.nan,
+    }
+
+    if len(sig1) < 2 or np.std(sig1) == 0 or np.std(sig2) == 0:
+        return nan_result
+
+    # OLS scale: minimize ||sig1 - a*sig2||² → a = <sig2, sig1> / <sig2, sig2>
+    denom = np.dot(sig2, sig2)
+    a_ols = np.dot(sig2, sig1) / denom if denom != 0 else 1.0
+    sig2_scaled = a_ols * sig2
+
+    try:
+        p_raw,    _ = pearsonr(sig1, sig2)
+        p_scaled, _ = pearsonr(sig1, sig2_scaled)
+        s_raw,    _ = spearmanr(sig1, sig2)
+        s_scaled, _ = spearmanr(sig1, sig2_scaled)
+    except Exception:
+        return nan_result
+
+    return {
+        'pearson_raw':   float(p_raw),
+        'pearson_scaled': float(p_scaled),
+        'spearman_raw':  float(s_raw),
+        'spearman_scaled': float(s_scaled),
+    }
 
     return tau_fit, (A_fit, tau_fit, C_fit)
