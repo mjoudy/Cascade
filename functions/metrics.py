@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import pearsonr, spearmanr, zscore, linregress
+from scipy.stats import pearsonr, spearmanr, zscore, linregress, wilcoxon
+from scipy.optimize import minimize_scalar
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 from scipy.optimize import curve_fit
@@ -951,6 +952,48 @@ def compute_cumsum_correlation_metrics(true_spikes_train, reconstructed_spikes):
     }
 
 
+def compute_binned_rate_correlation_metrics(true_spikes_train, reconstructed_spikes,
+                                            bin_ms=500.0, fs=200.0):
+    """
+    Pearson and Spearman between binned spike counts (no cumsum).
+    Bin both traces into bin_ms-wide windows and correlate the per-bin totals.
+    This is genuinely different from cumsum metrics: it measures whether the
+    reconstruction fires in the right time bins, not just the running total.
+    bin_ms=500 ms was selected from a bin-width sweep in active_neurons.ipynb.
+    """
+    true_spikes_train    = np.asarray(true_spikes_train, dtype=float)
+    reconstructed_spikes = np.asarray(reconstructed_spikes, dtype=float)
+
+    nan_result = {
+        'pearson_binned_rate':  np.nan,
+        'spearman_binned_rate': np.nan,
+    }
+
+    bin_frames = max(1, int(round(bin_ms * fs / 1000.0)))
+    T      = len(true_spikes_train)
+    n_bins = T // bin_frames
+    if n_bins < 3:
+        return nan_result
+
+    sl          = n_bins * bin_frames
+    true_binned = true_spikes_train[:sl].reshape(n_bins, bin_frames).sum(axis=1)
+    rec_binned  = reconstructed_spikes[:sl].reshape(n_bins, bin_frames).sum(axis=1)
+
+    if np.std(true_binned) == 0 or np.std(rec_binned) == 0:
+        return nan_result
+
+    try:
+        p, _ = pearsonr(true_binned, rec_binned)
+        s, _ = spearmanr(true_binned, rec_binned)
+    except Exception:
+        return nan_result
+
+    return {
+        'pearson_binned_rate':  float(p),
+        'spearman_binned_rate': float(s),
+    }
+
+
 def compute_signal_correlation_metrics(sig1, sig2):
     """
     Pearson and Spearman between two signals, both raw and after OLS amplitude
@@ -995,3 +1038,154 @@ def compute_signal_correlation_metrics(sig1, sig2):
     }
 
     return tau_fit, (A_fit, tau_fit, C_fit)
+
+
+# ── GOF scaling & metrics ─────────────────────────────────────────────────────
+
+def ols_scale(original, sim):
+    """OLS scale factor: minimises ||original - a*sim||²."""
+    return np.dot(sim, original) / np.dot(sim, sim)
+
+
+def lad_scale(original, sim):
+    """LAD scale factor: minimises sum|original - a*sim|."""
+    result = minimize_scalar(
+        lambda a: np.sum(np.abs(original - a * sim)),
+        bounds=(0.01, 100), method='bounded'
+    )
+    return result.x
+
+
+def compute_gof(original, sim):
+    """Return dict with mse, rmse, r_squared for a (original, sim) pair."""
+    mse    = np.mean((original - sim) ** 2)
+    ss_res = np.sum((original - sim) ** 2)
+    ss_tot = np.sum((original - np.mean(original)) ** 2)
+    return {
+        'mse':       mse,
+        'rmse':      np.sqrt(mse),
+        'r_squared': 1 - ss_res / ss_tot if ss_tot > 0 else np.nan,
+    }
+
+
+def add_chi2_nmse(sub_dict, y_true, y_pred):
+    """Add chi_squared and nmse keys to an existing GOF sub-dict in-place."""
+    eps = 1e-10
+    sub_dict['chi_squared'] = float(np.sum((y_true - y_pred) ** 2 / (np.abs(y_pred) + eps)))
+    mse      = np.mean((y_true - y_pred) ** 2)
+    var_true = np.var(y_true, ddof=1)
+    sub_dict['nmse'] = float(mse / var_true) if var_true > 0 else np.nan
+
+
+# ── PSD ───────────────────────────────────────────────────────────────────────
+
+def lorentzian(f, A, tau, white_noise):
+    """Lorentzian (1/f²) power spectrum model for tau estimation."""
+    return A / (1 + (2 * np.pi * f * tau) ** 2) + white_noise
+
+
+# ── Spike / neuron statistics ─────────────────────────────────────────────────
+
+def neuron_spike_metrics(n):
+    """Return (firing_rate_hz, mean_isi_s, cv2, burst_index) for one neuron dict."""
+    spikes   = np.sort(n['original_neuron']['spikes'])
+    time     = n['evenly_spaced_time']
+    duration = time[-1] - time[0]
+    n_spikes = len(spikes)
+
+    firing_rate = n_spikes / duration if duration > 0 else np.nan
+
+    if n_spikes > 1:
+        isis        = np.diff(spikes)
+        mean_isi    = np.mean(isis)
+        cv2         = np.mean(2 * np.abs(np.diff(isis)) / (isis[:-1] + isis[1:])) if len(isis) > 1 else np.nan
+        burst_index = np.mean(isis < mean_isi / 2)
+    else:
+        mean_isi = cv2 = burst_index = np.nan
+
+    return firing_rate, mean_isi, cv2, burst_index
+
+
+# ── Tau-sweep metric helpers ──────────────────────────────────────────────────
+
+def calcium_metrics(original, sim):
+    """OLS-scale sim onto original; return (nmse, scale_factor)."""
+    denom = np.dot(sim, sim)
+    if denom == 0:
+        return np.nan, np.nan
+    a        = np.dot(sim, original) / denom
+    var_true = np.var(original, ddof=1)
+    nmse     = float(np.mean((original - a * sim) ** 2) / var_true) if var_true > 0 else np.nan
+    return nmse, float(a)
+
+
+def cumsum_metrics(x_true, rec):
+    """OLS-scale cumsum(rec) onto x_true; return (nmse, slope)."""
+    y_rec = np.cumsum(rec).astype(float)
+    denom = np.dot(x_true, x_true)
+    if denom == 0:
+        return np.nan, np.nan
+    slope = np.dot(x_true, y_rec) / denom
+    if slope == 0:
+        return np.nan, np.nan
+    y_pred = y_rec / slope
+    var_x  = np.var(x_true, ddof=1)
+    nmse   = float(np.mean((x_true - y_pred) ** 2) / var_x) if var_x > 0 else np.nan
+    return nmse, float(slope)
+
+
+def minmax_norm(arr):
+    """Normalise array to [0, 1]; returns zeros if range is zero."""
+    mn, mx = np.nanmin(arr), np.nanmax(arr)
+    return (arr - mn) / (mx - mn) if mx > mn else np.zeros_like(arr)
+
+
+# ── Correlation helpers for tau-sweep figures ─────────────────────────────────
+
+def safe_pearson(a, b):
+    """Pearson r; returns nan if too few samples or zero variance."""
+    if len(a) < 3 or np.std(a) == 0 or np.std(b) == 0:
+        return np.nan
+    try:
+        return float(pearsonr(a, b)[0])
+    except Exception:
+        return np.nan
+
+
+def safe_spearman(a, b):
+    """Spearman r; returns nan if too few samples or zero variance."""
+    if len(a) < 3 or np.std(a) == 0 or np.std(b) == 0:
+        return np.nan
+    try:
+        return float(spearmanr(a, b)[0])
+    except Exception:
+        return np.nan
+
+
+def nonsig_mask(mat, alpha=0.05):
+    """
+    Identify tau values not significantly worse than the best tau.
+
+    Returns (mask, best_col) where mask[t]=True means tau t is NOT
+    significantly worse than the best tau (paired Wilcoxon, Bonferroni corrected).
+    """
+    n_tau   = mat.shape[1]
+    medians = np.nanmedian(mat, axis=0)
+    best    = int(np.nanargmax(medians))
+    mask    = np.ones(n_tau, dtype=bool)
+    n_comp  = n_tau - 1
+
+    for t in range(n_tau):
+        if t == best:
+            continue
+        a, b  = mat[:, best], mat[:, t]
+        valid = np.isfinite(a) & np.isfinite(b)
+        if valid.sum() < 5 or np.all(a[valid] == b[valid]):
+            continue
+        try:
+            _, p    = wilcoxon(a[valid], b[valid], alternative='greater')
+            mask[t] = (p * n_comp) > alpha
+        except Exception:
+            pass
+
+    return mask, best
