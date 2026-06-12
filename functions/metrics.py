@@ -977,7 +977,8 @@ def compute_binned_rate_correlation_metrics(true_spikes_train, reconstructed_spi
 
     sl          = n_bins * bin_frames
     true_binned = true_spikes_train[:sl].reshape(n_bins, bin_frames).sum(axis=1)
-    rec_binned  = reconstructed_spikes[:sl].reshape(n_bins, bin_frames).sum(axis=1)
+    rec_clipped = np.clip(reconstructed_spikes[:sl], 0, None)
+    rec_binned  = rec_clipped.reshape(n_bins, bin_frames).sum(axis=1)
 
     if np.std(true_binned) == 0 or np.std(rec_binned) == 0:
         return nan_result

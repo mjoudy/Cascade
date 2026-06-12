@@ -299,12 +299,12 @@ def plot_neuron_summary(neuron_idx, neurons, df_measurements, zoom_s=5.0, zoom_s
     T  = len(time)
     fs = 1.0 / (time[1] - time[0]) if T > 1 else 200.0
 
-    # Binned rate vectors for scatter panels (500 ms bins, same as pipeline)
-    BIN_MS = 500.0
+    # Binned rate vectors — use group-optimal bin stored on neuron, fallback 500 ms
+    BIN_MS     = n.get('binned_rate_bin_ms', 500.0)
     bin_frames = max(1, int(round(BIN_MS * fs / 1000.0)))
     n_bins     = T // bin_frames
     sl         = n_bins * bin_frames
-    true_train = get_spikes_train(spike_times, time).astype(float)
+    true_train  = get_spikes_train(spike_times, time).astype(float)
     true_binned = true_train[:sl].reshape(n_bins, bin_frames).sum(axis=1)
     rec_binned     = np.clip(rec,     0, None)[:sl].reshape(n_bins, bin_frames).sum(axis=1) if rec     is not None else None
     rec_psd_binned = np.clip(rec_psd, 0, None)[:sl].reshape(n_bins, bin_frames).sum(axis=1) if rec_psd is not None else None
@@ -346,7 +346,7 @@ def plot_neuron_summary(neuron_idx, neurons, df_measurements, zoom_s=5.0, zoom_s
         ax_zm  = fig.add_subplot(gs_row[1])
 
         # Full-signal overlay — True is thicker so overlap is visible even when buried
-        ax_ov.plot(time, calcium, color='#4C72B0', lw=1.4, alpha=0.9, label='True')
+        ax_ov.plot(time, calcium, color='#4C72B0', lw=1.4, alpha=0.9, label='Calcium')
         if sim_sc is not None:
             ax_ov.plot(time, sim_sc, color='#C44E52', lw=0.9, alpha=0.6, label='Simulated (OLS)')
             res = calcium - sim_sc
@@ -354,21 +354,75 @@ def plot_neuron_summary(neuron_idx, neurons, df_measurements, zoom_s=5.0, zoom_s
             ax_res.axhline(0, color='black', lw=0.7, linestyle='--', alpha=0.5)
             ax_res.fill_between(time, res, 0, alpha=0.2, color='#888888')
             ax_res.set_ylabel('Resid.', fontsize=7)
+
+        # Spike rasters — two bands below the calcium trace
+        _ymin, _ymax = calcium.min(), calcium.max()
+        _rng     = _ymax - _ymin if _ymax != _ymin else 1.0
+        _tick_h  = 0.06 * _rng   # true spike tick height
+        _rec_h   = 0.18 * _rng   # reconstructed trace band height
+        _gap     = 0.03 * _rng
+        # Band positions (from top of calcium downward)
+        _tick_top = _ymin - _gap                          # top of true-spike band
+        _rec_top  = _tick_top - _tick_h - _gap            # top of rec band
+        _rec_base = _rec_top - _rec_h                     # bottom of rec band
+
+        # True spikes: vertical ticks
+        _sp_in = spike_times[(spike_times >= time[0]) & (spike_times <= time[-1])]
+        ax_ov.vlines(_sp_in, _tick_top - _tick_h, _tick_top,
+                     color='#2c7bb6', lw=0.6, alpha=0.8, label='True spikes')
+
+        # Reconstructed: filled trace scaled to fill its own band
+        _rec_raw = rec if ri == 0 else rec_psd
+        if _rec_raw is not None:
+            _rec_cl = np.clip(_rec_raw, 0, None)
+            _mx = _rec_cl.max()
+            if _mx > 0:
+                _rec_y = _rec_base + _rec_h * (_rec_cl / _mx)
+                ax_ov.fill_between(time, _rec_base, _rec_y,
+                                   color='#e05c3a', alpha=0.55, label='Rec spikes')
+                ax_ov.plot(time, _rec_y, color='#c0392b', lw=0.6, alpha=0.7)
+
+        ax_ov.set_ylim(_rec_base - _gap, _ymax + 0.05 * _rng)
+
         # Highlight zoom window
         ax_ov.axvspan(time[zoom_sl.start], time[zoom_sl.stop - 1],
                       alpha=0.12, color='green', zorder=0, label='zoom')
         ax_ov.set_title(f'τ = {tv:.0f} ms ({label})   r = {_fmt(pv)}  |  ρ = {_fmt(sv)}', fontsize=9)
         ax_ov.set_ylabel('dF/F')
-        ax_ov.legend(fontsize=7, frameon=False, ncol=3)
+        ax_ov.legend(fontsize=7, frameon=False, ncol=4)
         ax_res.set_xlabel('Time (s)')
         plt.setp(ax_ov.get_xticklabels(), visible=False)
         _clean(ax_ov); _clean(ax_res)
 
-        # Zoomed panel — same thickness hierarchy
-        ax_zm.plot(zt, zc, color='#4C72B0', lw=2.0, alpha=0.9, label='True')
+        # Zoomed panel — same thickness hierarchy + spike rasters
+        ax_zm.plot(zt, zc, color='#4C72B0', lw=2.0, alpha=0.9, label='Calcium')
         if sim_sc is not None:
             ax_zm.plot(zt, sim_sc[zoom_sl], color='#C44E52', lw=1.3, alpha=0.7, label='Simulated')
             ax_zm.fill_between(zt, zc, sim_sc[zoom_sl], alpha=0.15, color='#888888')
+        _zymin, _zymax = zc.min(), zc.max()
+        _zrng    = _zymax - _zymin if _zymax != _zymin else 1.0
+        _ztick_h = 0.06 * _zrng
+        _zrec_h  = 0.18 * _zrng
+        _zgap    = 0.03 * _zrng
+        _ztick_top = _zymin - _zgap
+        _zrec_top  = _ztick_top - _ztick_h - _zgap
+        _zrec_base = _zrec_top - _zrec_h
+
+        _sp_zoom = spike_times[(spike_times >= zt[0]) & (spike_times <= zt[-1])]
+        ax_zm.vlines(_sp_zoom, _ztick_top - _ztick_h, _ztick_top,
+                     color='#2c7bb6', lw=1.2, alpha=0.85)
+
+        _rec_zoom = (rec if ri == 0 else rec_psd)
+        if _rec_zoom is not None:
+            _rz = np.clip(_rec_zoom[zoom_sl], 0, None)
+            _mx = _rz.max()
+            if _mx > 0:
+                _rz_y = _zrec_base + _zrec_h * (_rz / _mx)
+                ax_zm.fill_between(zt, _zrec_base, _rz_y,
+                                   color='#e05c3a', alpha=0.55)
+                ax_zm.plot(zt, _rz_y, color='#c0392b', lw=0.8, alpha=0.7)
+
+        ax_zm.set_ylim(_zrec_base - _zgap, _zymax + 0.05 * _zrng)
         ax_zm.set_xlabel('Time (s)', fontsize=8)
         ax_zm.set_ylabel('dF/F', fontsize=8)
         ax_zm.set_title(f'Zoom  ({zoom_s:.0f} s, highest-variance window)', fontsize=9)
@@ -398,23 +452,26 @@ def plot_neuron_summary(neuron_idx, neurons, df_measurements, zoom_s=5.0, zoom_s
     _gof_scatter(ax_scat_tau, sim_rec_sc,     s_tau, f'Scatter  τ={tau_ms:.0f} ms (deriv)')
     _gof_scatter(ax_scat_psd, sim_rec_psd_sc, s_psd, f'Scatter  τ={tau_psd_ms:.0f} ms (PSD)')
 
-    def _binned_rate_scatter(ax, true_b, rec_b, sv, title):
+    def _binned_rate_scatter(ax, true_b, rec_b, title):
         if rec_b is None:
             ax.set_title(title + '\n[no data]', fontsize=9); return
-        lo = min(true_b.min(), rec_b.min())
-        hi = max(true_b.max(), rec_b.max())
-        n_bins_2d = int(hi - lo) + 1
-        ax.hist2d(true_b, rec_b, bins=max(n_bins_2d, 10),
-                  range=[[lo, hi], [lo, hi]], cmap='Blues')
-        ax.plot([lo, hi], [lo, hi], 'r--', lw=1, label='y = x')
-        ax.set_title(f'{title}\nρ = {_fmt(sv)}', fontsize=9)
-        ax.set_xlabel(f'True  ({BIN_MS:.0f} ms bins)', fontsize=8)
-        ax.set_ylabel('Rec', fontsize=8)
+        sv = safe_spearman(true_b, rec_b)
+        # Scale rec to match true range for display only (Spearman is rank-invariant)
+        rec_mean = rec_b.mean()
+        rec_disp = rec_b * (true_b.mean() / rec_mean) if rec_mean > 0 else rec_b
+        ax.scatter(true_b, rec_disp, s=6, alpha=0.4, color='#4C72B0',
+                   edgecolors='none', rasterized=True)
+        hi = max(true_b.max(), rec_disp.max())
+        ax.plot([0, hi], [0, hi], 'k--', lw=1, label='y = x')
+        ax.set_title(f'{title}  ({BIN_MS:.0f} ms bins)\nρ = {_fmt(sv)}', fontsize=9)
+        ax.set_xlabel('True spike count / bin', fontsize=7)
+        ax.set_ylabel('Rec (scaled) / bin', fontsize=7)
+        ax.tick_params(labelsize=7)
         ax.legend(fontsize=7, frameon=False)
         _clean(ax)
 
-    _binned_rate_scatter(ax_cs_tau, true_binned, rec_binned,     row.get('spearman_binned_rate_raw'),     f'Binned rate\nTrue vs Rec (deriv τ)')
-    _binned_rate_scatter(ax_cs_psd, true_binned, rec_psd_binned, row.get('spearman_binned_rate_raw_psd'), f'Binned rate\nTrue vs Rec (PSD τ)')
+    _binned_rate_scatter(ax_cs_tau, true_binned, rec_binned,     f'Binned rate  (deriv τ)')
+    _binned_rate_scatter(ax_cs_psd, true_binned, rec_psd_binned, f'Binned rate  (PSD τ)')
 
     fig.suptitle(
         f'Full Analysis Summary — Neuron {neuron_idx}  —  {dataset}\n'
