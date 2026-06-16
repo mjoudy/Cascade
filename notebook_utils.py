@@ -142,7 +142,7 @@ def build_group_indices(neurons, ds_to_group=None):
 #   plot_linear_corr_hist(ax, data, label, color)   — for spread-out distributions
 #   plot_log_corr_hist(ax, data, label, color)       — for distributions near 1
 
-CORR_COLORS = ['#8172B2', '#937860']   # [deriv-τ: purple, PSD-τ: brown]
+CORR_COLORS = ['#4C72B0', '#DD8452']   # [deriv-τ: blue, PSD-τ: orange]
 
 CORR_RCPARAMS = {
     'font.family': 'sans-serif', 'font.size': 10,
@@ -329,24 +329,21 @@ def plot_neuron_summary(neuron_idx, neurons, df_measurements, zoom_s=5.0, zoom_s
     def _fmt(v):
         return f'{v:.3f}' if (v is not None and np.isfinite(v)) else 'N/A'
 
-    fig     = plt.figure(figsize=(14, 9))
-    gs_main = gridspec.GridSpec(3, 1, figure=fig, height_ratios=[1.4, 1.4, 1.1], hspace=0.5)
+    fig     = plt.figure(figsize=(14, 11))
+    gs_main = gridspec.GridSpec(3, 1, figure=fig, height_ratios=[1.3, 1.3, 1.6], hspace=0.55)
 
     panels = [
-        (sim_rec_sc,     p_tau, s_tau, tau_ms,     'deriv'),
-        (sim_rec_psd_sc, p_psd, s_psd, tau_psd_ms, 'PSD'),
+        (sim_rec_sc,     p_tau, s_tau, tau_ms,     'deriv', rec),
+        (sim_rec_psd_sc, p_psd, s_psd, tau_psd_ms, 'PSD',   rec_psd),
     ]
-    for ri, (sim_sc, pv, sv, tv, label) in enumerate(panels):
-        gs_row  = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=gs_main[ri],
-                                                   width_ratios=[3, 2], wspace=0.18)
-        gs_left = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec=gs_row[0],
-                                                   height_ratios=[3, 1], hspace=0.08)
-        ax_ov  = fig.add_subplot(gs_left[0])
-        ax_res = fig.add_subplot(gs_left[1], sharex=ax_ov)
-        ax_zm  = fig.add_subplot(gs_row[1])
+    for ri, (sim_sc, pv, sv, tv, label, rec_) in enumerate(panels):
+        gs_row = gridspec.GridSpecFromSubplotSpec(2, 1, subplot_spec=gs_main[ri],
+                                                  height_ratios=[3, 1], hspace=0.08)
+        ax_ov  = fig.add_subplot(gs_row[0])
+        ax_res = fig.add_subplot(gs_row[1], sharex=ax_ov)
 
         # Full-signal overlay — True is thicker so overlap is visible even when buried
-        ax_ov.plot(time, calcium, color='#4C72B0', lw=1.4, alpha=0.9, label='Calcium')
+        ax_ov.plot(time, calcium, color='#4C72B0', lw=2.5, alpha=0.9, label='Calcium')
         if sim_sc is not None:
             ax_ov.plot(time, sim_sc, color='#C44E52', lw=0.9, alpha=0.6, label='Simulated (OLS)')
             res = calcium - sim_sc
@@ -372,9 +369,8 @@ def plot_neuron_summary(neuron_idx, neurons, df_measurements, zoom_s=5.0, zoom_s
                      color='#2c7bb6', lw=0.6, alpha=0.8, label='True spikes')
 
         # Reconstructed: filled trace scaled to fill its own band
-        _rec_raw = rec if ri == 0 else rec_psd
-        if _rec_raw is not None:
-            _rec_cl = np.clip(_rec_raw, 0, None)
+        if rec_ is not None:
+            _rec_cl = np.clip(rec_, 0, None)
             _mx = _rec_cl.max()
             if _mx > 0:
                 _rec_y = _rec_base + _rec_h * (_rec_cl / _mx)
@@ -394,47 +390,39 @@ def plot_neuron_summary(neuron_idx, neurons, df_measurements, zoom_s=5.0, zoom_s
         plt.setp(ax_ov.get_xticklabels(), visible=False)
         _clean(ax_ov); _clean(ax_res)
 
-        # Zoomed panel — same thickness hierarchy + spike rasters
-        ax_zm.plot(zt, zc, color='#4C72B0', lw=2.0, alpha=0.9, label='Calcium')
-        if sim_sc is not None:
-            ax_zm.plot(zt, sim_sc[zoom_sl], color='#C44E52', lw=1.3, alpha=0.7, label='Simulated')
-            ax_zm.fill_between(zt, zc, sim_sc[zoom_sl], alpha=0.15, color='#888888')
-        _zymin, _zymax = zc.min(), zc.max()
-        _zrng    = _zymax - _zymin if _zymax != _zymin else 1.0
-        _ztick_h = 0.06 * _zrng
-        _zrec_h  = 0.18 * _zrng
-        _zgap    = 0.03 * _zrng
-        _ztick_top = _zymin - _zgap
-        _zrec_top  = _ztick_top - _ztick_h - _zgap
-        _zrec_base = _zrec_top - _zrec_h
+    # Bottom row: 2×2 scatters (left) + single combined zoom (right)
+    gs2     = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=gs_main[2],
+                                               width_ratios=[3, 2], wspace=0.35)
+    gs_scat = gridspec.GridSpecFromSubplotSpec(2, 2, subplot_spec=gs2[0],
+                                               hspace=0.55, wspace=0.45)
+    ax_scat_tau = fig.add_subplot(gs_scat[0, 0])
+    ax_scat_psd = fig.add_subplot(gs_scat[0, 1])
+    ax_cs_tau   = fig.add_subplot(gs_scat[1, 0])
+    ax_cs_psd   = fig.add_subplot(gs_scat[1, 1])
 
-        _sp_zoom = spike_times[(spike_times >= zt[0]) & (spike_times <= zt[-1])]
-        ax_zm.vlines(_sp_zoom, _ztick_top - _ztick_h, _ztick_top,
-                     color='#2c7bb6', lw=1.2, alpha=0.85)
-
-        _rec_zoom = (rec if ri == 0 else rec_psd)
-        if _rec_zoom is not None:
-            _rz = np.clip(_rec_zoom[zoom_sl], 0, None)
-            _mx = _rz.max()
-            if _mx > 0:
-                _rz_y = _zrec_base + _zrec_h * (_rz / _mx)
-                ax_zm.fill_between(zt, _zrec_base, _rz_y,
-                                   color='#e05c3a', alpha=0.55)
-                ax_zm.plot(zt, _rz_y, color='#c0392b', lw=0.8, alpha=0.7)
-
-        ax_zm.set_ylim(_zrec_base - _zgap, _zymax + 0.05 * _zrng)
-        ax_zm.set_xlabel('Time (s)', fontsize=8)
-        ax_zm.set_ylabel('dF/F', fontsize=8)
-        ax_zm.set_title(f'Zoom  ({zoom_s:.0f} s, highest-variance window)', fontsize=9)
-        ax_zm.legend(fontsize=7, frameon=False)
-        _clean(ax_zm)
-
-    # Bottom row: scatter + cumsum
-    gs2         = gridspec.GridSpecFromSubplotSpec(1, 4, subplot_spec=gs_main[2], wspace=0.45)
-    ax_scat_tau = fig.add_subplot(gs2[0])
-    ax_scat_psd = fig.add_subplot(gs2[1])
-    ax_cs_tau   = fig.add_subplot(gs2[2])
-    ax_cs_psd   = fig.add_subplot(gs2[3])
+    # Single zoom panel — both simulations overlaid on the same calcium trace
+    ax_zm = fig.add_subplot(gs2[1])
+    ax_zm.plot(zt, zc, color='#4C72B0', lw=3.0, alpha=0.9, label='Calcium')
+    if sim_rec_sc is not None:
+        ax_zm.plot(zt, sim_rec_sc[zoom_sl], color='#C44E52', lw=1.4, alpha=0.8,
+                   label='Sim (deriv)')
+    if sim_rec_psd_sc is not None:
+        ax_zm.plot(zt, sim_rec_psd_sc[zoom_sl], color='#DD8452', lw=1.4, alpha=0.8,
+                   linestyle='--', label='Sim (PSD)')
+    _zymin, _zymax = zc.min(), zc.max()
+    _zrng      = _zymax - _zymin if _zymax != _zymin else 1.0
+    _zgap      = 0.03 * _zrng
+    _ztick_h   = 0.06 * _zrng
+    _ztick_top = _zymin - _zgap
+    _sp_zoom = spike_times[(spike_times >= zt[0]) & (spike_times <= zt[-1])]
+    ax_zm.vlines(_sp_zoom, _ztick_top - _ztick_h, _ztick_top,
+                 color='#2c7bb6', lw=1.2, alpha=0.85, label='True spikes')
+    ax_zm.set_ylim(_ztick_top - _ztick_h - _zgap, _zymax + 0.05 * _zrng)
+    ax_zm.set_xlabel('Time (s)', fontsize=8)
+    ax_zm.set_ylabel('dF/F', fontsize=8)
+    ax_zm.set_title(f'Zoom  ({zoom_s:.0f} s window)', fontsize=9)
+    ax_zm.legend(fontsize=7, frameon=False)
+    _clean(ax_zm)
 
     def _gof_scatter(ax, sim_sc, sv, title):
         if sim_sc is None:
