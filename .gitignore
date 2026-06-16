@@ -9,3 +9,16 @@ __pycache__/
 /data
 /reconstruction_plots
 /reconstruction_analysis
+
+# generated analysis outputs (figures, measurement tables) — reproduce by
+# running active_neurons_clean.ipynb then df_analysis.ipynb
+/outputs/
+/figures_outputs/
+/neurons_list.csv
+/neurons_measurements.csv
+/neurons_measurements_corr.csv
+/neuron_*_summary.pdf
+/tau_*.pdf
+/tau_*.png
+/gof_histograms*.pdf
+/gof_histograms*.png

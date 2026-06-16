@@ -13,6 +13,8 @@ dependencies:
   - ipywidgets
   - h5py
   - jupyter
+  - tqdm           # progress bars in the analysis pipeline
   - pip
   - pip:
-      - tensorflow  # Only if you plan to use the deep learning parts 
+      - nitime       # multitaper PSD used by the PSD-Lorentzian tau estimate
+      - tensorflow   # Only if you plan to use the deep learning parts (upstream CASCADE) 

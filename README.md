@@ -1,75 +1,89 @@
-# Spikes Proxy Analysis Project
+# Spike-Proxy Analysis
 
-**Note:** This section details the custom analysis methods and workflows developed in this fork. The original Cascade project documentation can be found [below](#original-cascade-project-readme).
+A mathematically transparent, τ-invariant framework for recovering continuous neural
+activity ("spike proxies") from calcium fluorescence. By modelling the calcium indicator
+as a linear time-invariant system, the indicator decay is inverted algebraically;
+Savitzky–Golay filtering provides robust derivatives, and the decay time constant τ is
+estimated by unsupervised methods. Validated on the public CASCADE ground-truth datasets
+across indicators and frame rates.
 
-This project focuses on the analysis of active neurons using a new method for estimating the decay time constant ($\tau$) of calcium signals. The current repository is a fork of the Cascade project, enhanced with custom analysis tools and workflows.
+> **This repository is a fork of the Cascade project** (Rupprecht et al.). The upstream
+> code (`cascade2p/`, `Demo scripts/`, `Ground_truth/`, `Pretrained_models/`,
+> `Example_datasets/`, `etc/`) is kept unmodified; its original documentation is preserved
+> in the **[Original Cascade Project README](#original-cascade-project-readme)** below.
+> Everything in this top section is the fork's own analysis.
 
-## Project Overview
+## Method
 
-The primary goal of this project is to analyze "active neurons" (neurons with significant spiking activity) from calcium imaging datasets. The core of this analysis involves a novel method for estimating the decay time constant ($\tau$) by analyzing the phase space of the signal and its derivative, specifically isolating the decay phase.
+The pipeline recovers a continuous spike proxy and validates it two ways:
 
-## New Analysis Method
+1. **τ via the derivative / phase-space method** (`functions/derivative_method.py`).
+   Spike onsets are cut out (`cut_spikes`) to isolate the decay-only bulk; the signal and
+   its Savitzky–Golay derivative are plotted against each other. For an exponential decay
+   $C(t)=C_0 e^{-t/\tau}$ this is linear, $\dot C = -\tfrac{1}{\tau}C$, so the negative
+   inverse slope gives τ (`estimate_tau`).
+2. **τ via a PSD Lorentzian fit** (blind, spike-free). The multitaper power spectrum is
+   fit with a Lorentzian whose corner frequency sets τ — an independent estimate.
+3. **Reconstruction & validation.** With each τ the spike proxy is reconstructed
+   (`reconstruct_spikes`) and forward-simulated back to calcium
+   (`simulate_calcium_from_reconstructed_spikes`). Goodness-of-fit, cumsum calibration and
+   binned-rate correlations quantify quality. Because noise regularisation is decoupled
+   from τ, reconstruction quality is robust to τ errors of up to ~2× ("τ-invariance").
 
-This project implements a custom analysis pipeline developed and verified on synthetic data. The method is now applied to real experimental data within this repository.
+## Repository structure
 
-### Key Components:
+```
+functions/                 # the analysis package
+  pipeline.py              # run_analysis(): full per-neuron pipeline, one stage per function
+  derivative_method.py     # estimate_tau, cut_spikes (phase-space τ)
+  reconstruction.py        # reconstruct_spikes, simulate_calcium_*, get_spikes_train
+  metrics.py               # GOF / correlation / cumsum-calibration metrics, Lorentzian model
+  plotting.py              # all figure helpers (corr histograms, neuron summary, dashboards)
+  groups.py                # dataset grouping schemes (GROUPS, DS_TO_GROUP, …)
+  data_manager.py          # ground-truth loading + upsampling
+  _deprecated.py           # retired ACF/manual-τ helpers, kept for reference (needs nitime)
 
-1.  **Preprocessing & Spike Cutting (`cut_spikes`):**
-    The method identifies spike events and effectively "cuts out" the rising phase and the immediate peak of the spike. This isolates the "decay-only" portion of the calcium signal, which is governed by the system's time constant.
+active_neurons_pipeline.ipynb # main notebook: run_analysis() → measurements table → figures
+active_neurons.ipynb       # same analysis written inline (no pipeline helpers), kept as reference
+df_analysis.ipynb          # downstream figures from the measurements table
+notebook_utils.py          # thin shim re-exporting functions.* (`from notebook_utils import *`)
+side_experiments/          # exploratory notebooks (PSD/ACF, deconvolution, SG sidelobe, cumsum)
+outputs/                   # generated CSVs + figures (git-ignored; produced by the notebooks)
+```
 
-2.  **Robust Tau Estimation (`estimate_tau`):**
-    *   **Smoothing:** The signal and its derivative are smoothed using Savitzky-Golay filters.
-    *   **Phase Space Analysis:** The method plots the signal against its derivative. For a simple exponential decay ($C(t) = C_0 e^{-t/\tau}$), this relationship is linear: $\frac{dC}{dt} = -\frac{1}{\tau} C(t)$.
-    *   **Fitting:** A linear fit is applied to the isolated decay phases in this phase space. The negative inverse of the slope yields the estimated $\tau$.
+## Reproducing the analysis
 
-3.  **Reconstruction & Validation:**
-    *   **Reconstruction:** Using the estimated $\tau$, the underlying spike train is reconstructed from the calcium signal, effectively deconvolving the dynamics.
-    *   **Calibration:** The method includes metrics to calibrate the magnitude of the reconstructed spikes against the original data, ensuring accurate quantitative analysis.
+The notebooks run in the **`phd_conda`** environment (the recorded kernel). Beyond the base
+scientific stack (numpy, scipy, pandas, matplotlib, scikit-learn, seaborn) they require
+**`nitime`** (multitaper PSD) and **`tqdm`**. See [environment.yml](environment.yml).
 
-## Repository Structure
+```bash
+# from the repository root, with the analysis environment active
+jupyter nbconvert --to notebook --execute --inplace active_neurons_pipeline.ipynb
+jupyter nbconvert --to notebook --execute --inplace df_analysis.ipynb
+```
 
-*   **`active_neurons.ipynb`**: The main analysis notebook. It performs the following steps:
-    *   Loads datasets using `datasets.load_selected_data`.
-    *   Filters for active neurons (> 100 spikes).
-    *   Upsamples signals to 100Hz for high-resolution analysis.
-    *   Applies the `estimate_tau` method to filtered neurons.
-    *   Visualizes original vs. upsampled data and analysis results.
+`active_neurons_pipeline.ipynb` loads all of `Ground_truth/`, keeps active neurons (>100
+spikes), upsamples to 200 Hz, runs the full pipeline, and writes
+`outputs/neurons_measurements_corr.csv` plus the τ-sweep figures. `df_analysis.ipynb` then
+reads that table and produces the per-group / per-frame-rate figures. All artifacts land
+under `outputs/` (git-ignored).
 
-*   **`functions/`**: A package containing the core implementations of the new method:
-    *   `derivative_method.py`: Contains `estimate_tau` and `cut_spikes` functions.
-    *   `reconstruction.py`: Functions for spike reconstruction and signal simulation.
-    *   `metrics.py`: Metrics for evaluating reconstruction quality, including cumulative sum slope analysis and binned comparisons.
-    *   `data_manager.py`: (Implied) Handles data loading and dataset management.
+To call the pipeline directly instead of through the notebook:
 
-## Integration with Forked Data
+```python
+from functions.pipeline import run_analysis, build_measurements_dataframe
 
-This repository utilizes the `cascade` codebase structure but introduces a simplified and targeted data pipeline. 
-*   Data is loaded into a dictionary structure (`data_dict`).
-*   It is then flattened and filtered (`data_active_neurons`).
-*   The `processing.upsample_v2` function ensures all data is on a consistent time grid (100Hz) before the new Tau estimation method is applied.
+neurons, optimal_bin_ms = run_analysis()              # full per-neuron build
+df, df_measurements     = build_measurements_dataframe(neurons)
+```
 
-## Analysis Workflow
+## Results
 
-To run the analysis on active neurons:
-
-1.  **Open `active_neurons.ipynb`**.
-2.  **Load Data:** Run the initial cells to load `data_dict` via `datasets.load_selected_data`.
-3.  **Preprocessing:** Execute the flattening and filtering steps to generate `data_active_neurons`.
-4.  **Upsampling:** Run the upsampling loop to prepare `upsampled_results`. This contains a list of dictionaries, where each item stores the processed data (signals, spikes, time) for a single neuron.
-5.  **Analysis:** The notebook applies `estimate_tau` to the upsampled signals:
-    ```python
-    from functions.derivative_method import estimate_tau
-    
-    # Example call
-    tau_val, fit_data = estimate_tau(u_sig, u_spk, window_len=51, poly_order=3, cut_win=10)
-    ```
-6.  **Visualize:** Use `plot_neuron_comparison` to inspect results. You can visualize different neurons by changing the `index` (neuron ID) passed to the function. This index corresponds to the position of the neuron in the `upsampled_results` list.
-    ```python
-    # Change index to view different neurons
-    # data_active_neurons stores the original data
-    # upsampled_results stores the calculated/upsampled data
-    plot_neuron_comparison(index=0, original_data_list=data_active_neurons, upsampled_data_list=upsampled_results)
-    ```
+On the 502 active ground-truth neurons, the reconstructed binned firing rate reaches a
+median Spearman ρ ≈ 0.75 against electrophysiology, while the forward-simulated calcium
+tracks the observed fluorescence at median Spearman ρ ≈ 0.97 — preserving continuous
+firing-rate modulation while removing the indicator-decay artifact.
 
 ---
 

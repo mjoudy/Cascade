@@ -38,7 +38,7 @@ def estimate_tau(u_sig, u_spk, window_len=51, poly_order=3, cut_win=10):
             tau_f = -1.0 / slope_fit if slope_fit < 0 else np.nan
         else:
             tau_f = np.nan
-    except: 
+    except (np.linalg.LinAlgError, ValueError, TypeError):
         tau_f = np.nan
         
     return tau_f, (sig_fit, der_fit)
