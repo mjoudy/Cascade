@@ -13,6 +13,15 @@ across indicators and frame rates.
 > in the **[Original Cascade Project README](#original-cascade-project-readme)** below.
 > Everything in this top section is the fork's own analysis.
 
+This work forms **Chapter 1** of the doctoral thesis of Mohammad Joudy
+([ORCID 0009-0005-6217-4094](https://orcid.org/0009-0005-6217-4094)), Bernstein Center
+Freiburg, Albert-Ludwigs-Universität Freiburg: *A Mathematically Transparent and
+Tau-Invariant Framework for Recovering Continuous Neural Activity from Calcium
+Fluorescence*.
+
+**Citing:** cite Rupprecht et al. (2021) for the CASCADE benchmark datasets, and this
+thesis chapter for the deconvolution framework itself.
+
 ## Method
 
 The pipeline recovers a continuous spike proxy and validates it two ways:
